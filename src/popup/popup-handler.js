@@ -19,7 +19,6 @@ export class PopupHandler {
   }
 
   bindEvents() {
-    // Chat events
     this.send.addEventListener('click', () => this.handleSend());
     this.input.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -28,7 +27,6 @@ export class PopupHandler {
       }
     });
 
-    // Tab switching
     this.tabButtons.forEach(button => {
       button.addEventListener('click', () => this.switchTab(button.dataset.tab));
     });
@@ -36,31 +34,28 @@ export class PopupHandler {
 
   async initLLM() {
     try {
-      await Knowledge.initLLM((progress) => {
-        this.loading.textContent = `Loading model: ${Math.round(progress.progress * 100)}%`;
+      await Knowledge._initializeIfNeeded((progress) => {
+        this.loading.textContent = `Loading models: ${Math.round(progress.progress * 100)}%`;
         if (progress.progress === 1) {
           this.loading.style.display = 'none';
           this.main.style.display = 'block';
-          this.refreshKnowledgeList(); // Load knowledge items
+          this.refreshKnowledgeList();
         }
       });
     } catch (error) {
-      this.loading.textContent = `Error loading model: ${error.message}`;
+      this.loading.textContent = `Error loading models: ${error.message}`;
     }
   }
 
   switchTab(tabId) {
-    // Update button states
     this.tabButtons.forEach(button => {
       button.classList.toggle('active', button.dataset.tab === tabId);
     });
 
-    // Update content visibility
     document.querySelectorAll('.tab-content').forEach(content => {
       content.classList.toggle('active', content.id === tabId);
     });
 
-    // Refresh knowledge list when switching to that tab
     if (tabId === 'knowledge') {
       this.refreshKnowledgeList();
     }
@@ -69,15 +64,44 @@ export class PopupHandler {
   async handleSend() {
     const query = this.input.value.trim();
     if (!query) return;
-
+  
     this.response.textContent = 'Thinking...';
     this.input.value = '';
-
+  
     try {
-      const result = await Knowledge.search(query);
+      // First try to get active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      let context = '';
+  
+      // Only try to connect if we have a valid tab and it's not a chrome:// URL
+      if (tab && !tab.url?.startsWith('chrome://')) {
+        try {
+          const port = chrome.runtime.connect(tab.id);
+          context = await new Promise((resolve) => {
+            port.onMessage.addListener((msg) => {
+              port.disconnect();
+              resolve(msg.contents || '');
+            });
+            port.postMessage({ type: 'GET_CONTENT' });
+            
+            // Add timeout to prevent hanging
+            setTimeout(() => {
+              port.disconnect();
+              resolve('');
+            }, 1000);
+          });
+        } catch (connectionError) {
+          console.warn('Could not get page context:', connectionError);
+          // Continue without context
+        }
+      }
+  
+      // Proceed with search regardless of whether we got context
+      const result = await Knowledge.search(query, context);
       this.displayResponse(result);
     } catch (error) {
       this.response.textContent = `Error: ${error.message}`;
+      console.error('Search error:', error);
     }
   }
 
@@ -111,7 +135,6 @@ export class PopupHandler {
           </div>
         `).join('');
 
-    // Add delete handlers
     this.knowledgeList.querySelectorAll('.knowledge-delete').forEach(button => {
       button.addEventListener('click', () => this.deleteKnowledgeItem(button.dataset.timestamp));
     });
@@ -123,10 +146,7 @@ export class PopupHandler {
   }
 
   async deleteKnowledgeItem(timestamp) {
-    const vectors = await Knowledge.getVectors();
-    const updatedVectors = vectors.filter(v => v.timestamp !== parseInt(timestamp));
-    await chrome.storage.local.set({ vectors: updatedVectors });
+    await Knowledge.deleteVector(parseInt(timestamp));
     this.refreshKnowledgeList();
   }
 }
-

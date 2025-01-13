@@ -10,6 +10,11 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "addToKnowledge") {
-    await Knowledge.storeText(info.selectionText, tab.url, tab.title);
+    try {
+      // No explicit initialization needed - it will happen automatically
+      await Knowledge.storeText(info.selectionText, tab.url, tab.title);
+    } catch (error) {
+      console.error('Error adding to knowledge base:', error);
+    }
   }
 });

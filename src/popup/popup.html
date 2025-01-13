@@ -9,13 +9,11 @@
   <div class="app">
     <div id="loading">Initializing model...</div>
     <div id="main" style="display:none">
-      <!-- Tab buttons -->
       <div class="tabs">
         <button class="tab-button active" data-tab="chat">Chat</button>
         <button class="tab-button" data-tab="knowledge">Knowledge Base</button>
       </div>
 
-      <!-- Chat tab -->
       <div id="chat" class="tab-content active">
         <div class="input-container">
           <textarea id="input" placeholder="Ask a question..."></textarea>
@@ -24,12 +22,11 @@
         <div id="response" class="response-container"></div>
       </div>
 
-      <!-- Knowledge base tab -->
       <div id="knowledge" class="tab-content">
         <div id="knowledge-list"></div>
       </div>
     </div>
   </div>
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

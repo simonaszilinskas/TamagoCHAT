@@ -6,7 +6,9 @@
         "dev": "webpack --mode development --watch"
     },
     "dependencies": {
-        "@mlc-ai/web-llm": "^0.2.77"
+        "@mlc-ai/web-llm": "^0.2.77",
+        "@langchain/core": "^0.1.0",
+        "langchain": "^0.1.0"
     },
     "devDependencies": {
         "@babel/core": "^7.26.0",
