@@ -3,21 +3,69 @@
 <head>
   <meta charset="UTF-8">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <title>Local LLM Knowledge Builder</title>
 </head>
 <body>
   <div class="app">
     <div id="loading">Initializing model...</div>
     <div id="main" style="display:none">
-      <div class="tabs">
-        <button class="tab-button active" data-tab="chat">Chat</button>
-        <button class="tab-button" data-tab="knowledge">Knowledge Base</button>
+      <!-- Header with tabs and settings -->
+      <div class="header">
+        <div class="tabs">
+          <button class="tab-button active" data-tab="chat">
+            <i class="fas fa-comments"></i> Chat
+          </button>
+          <button class="tab-button" data-tab="knowledge">
+            <i class="fas fa-brain"></i> Knowledge Base
+          </button>
+        </div>
+        <button id="settingsButton" class="settings-button">
+          <i class="fas fa-cog"></i>
+        </button>
       </div>
 
+      <!-- Settings Modal -->
+      <div id="settingsModal" class="settings-modal hidden">
+        <div class="settings-content">
+          <h3><i class="fas fa-cog"></i> Settings</h3>
+          <div class="setting-item">
+            <label>Backend:</label>
+            <select id="backendSelect">
+              <option value="local">
+                <i class="fas fa-laptop"></i> Local (WebLLM)
+              </option>
+              <option value="openai">
+                <i class="fas fa-cloud"></i> OpenAI
+              </option>
+            </select>
+          </div>
+          <div id="openaiSettings" class="setting-item hidden">
+            <label>OpenAI API Key:</label>
+            <input type="password" id="apiKeyInput" placeholder="sk-...">
+            <p class="hint">
+              <i class="fas fa-info-circle"></i>
+              Your API key will be stored locally
+            </p>
+          </div>
+          <div class="setting-actions">
+            <button id="saveSettings" class="primary">
+              <i class="fas fa-save"></i> Save
+            </button>
+            <button id="closeSettings">
+              <i class="fas fa-times"></i> Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content Areas -->
       <div id="chat" class="tab-content active">
         <div class="input-container">
           <textarea id="input" placeholder="Ask a question..."></textarea>
-          <button id="send">Send</button>
+          <button id="send">
+            <i class="fas fa-paper-plane"></i>
+          </button>
         </div>
         <div id="response" class="response-container"></div>
       </div>

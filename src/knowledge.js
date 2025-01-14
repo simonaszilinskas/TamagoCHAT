@@ -1,13 +1,11 @@
-// knowledge.js
 import * as webllm from "@mlc-ai/web-llm";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { PromptTemplate } from "@langchain/core/prompts";
-import {
-  RunnableSequence,
-  RunnablePassthrough,
-} from "@langchain/core/runnables";
+import { RunnableSequence, RunnablePassthrough } from "@langchain/core/runnables";
 import { formatDocumentsAsString } from "langchain/util/document";
+import OpenAIBackend from './backends/openai';
 
+// Define WebLLMEmbeddings class
 class WebLLMEmbeddings {
   constructor(engine, modelId) {
     this.engine = engine;
@@ -42,6 +40,8 @@ class Knowledge {
     this.EMBEDDING_MODEL = "snowflake-arctic-embed-m-q0f32-MLC-b4";
     this.LLM_MODEL = "Qwen2-0.5B-Instruct-q4f16_1-MLC";
     this.pendingDocuments = [];
+    this.backend = 'local';
+    this.openaiBackend = null;
   }
 
   async _initializeIfNeeded(callback) {
@@ -51,23 +51,56 @@ class Knowledge {
       this.initPromise = this._initialize(callback);
     }
     
-    await this.initPromise;
+    try {
+      await this.initPromise;
+    } catch (error) {
+      this.initPromise = null;
+      throw error;
+    }
   }
 
   async _initialize(callback) {
     try {
-      // Initialize engine with both models
-      this.engine = await webllm.CreateMLCEngine(
-        [this.EMBEDDING_MODEL, this.LLM_MODEL],
-        {
-          initProgressCallback: callback,
-          logLevel: "INFO"
+      // Load settings
+      const settings = await chrome.storage.local.get(['backend', 'apiKey']);
+      this.backend = settings.backend || 'local';
+
+      // Reset state
+      this.engine = null;
+      this.vectorStore = null;
+      this.embeddings = null;
+
+      if (this.backend === 'openai') {
+        if (!settings.apiKey) {
+          throw new Error('OpenAI API key not found');
         }
-      );
+        console.log('Initializing OpenAI backend...');
+        this.openaiBackend = new OpenAIBackend(settings.apiKey);
+        
+        // Verify API key
+        const isValid = await this.openaiBackend.verifyApiKey();
+        if (!isValid) {
+          throw new Error('Invalid OpenAI API key');
+        }
+        
+        // Set embeddings to use OpenAI backend
+        this.embeddings = this.openaiBackend;
+      } else {
+        console.log('Initializing local backend...');
+        // Initialize local engine with both models
+        this.engine = await webllm.CreateMLCEngine(
+          [this.EMBEDDING_MODEL, this.LLM_MODEL],
+          {
+            initProgressCallback: callback,
+            logLevel: "INFO"
+          }
+        );
+        
+        // Initialize embeddings
+        this.embeddings = new WebLLMEmbeddings(this.engine, this.EMBEDDING_MODEL);
+      }
 
-      // Initialize embeddings
-      this.embeddings = new WebLLMEmbeddings(this.engine, this.EMBEDDING_MODEL);
-
+      console.log('Initializing vector store...');
       // Initialize vector store
       this.vectorStore = await MemoryVectorStore.fromExistingIndex(this.embeddings);
 
@@ -93,47 +126,12 @@ class Knowledge {
         this.pendingDocuments = [];
       }
 
+      console.log('Initialization complete');
       this.isInitialized = true;
     } catch (error) {
       console.error('Error in initialization:', error);
+      this.isInitialized = false;
       this.initPromise = null;
-      throw error;
-    }
-  }
-
-  async storeText(text, url, title) {
-    await this._initializeIfNeeded();
-
-    try {
-      const doc = {
-        pageContent: text,
-        metadata: {
-          url,
-          title,
-          timestamp: Date.now()
-        }
-      };
-
-      if (!this.vectorStore) {
-        this.pendingDocuments.push(doc);
-      } else {
-        await this.vectorStore.addDocuments([doc]);
-      }
-
-      // Save to chrome storage
-      const stored = await chrome.storage.local.get('vectors');
-      const vectors = stored.vectors || [];
-      vectors.push({
-        text,
-        url,
-        title,
-        timestamp: doc.metadata.timestamp
-      });
-      await chrome.storage.local.set({ vectors });
-
-      return doc.metadata.timestamp;
-    } catch (error) {
-      console.error('Error storing text:', error);
       throw error;
     }
   }
@@ -169,15 +167,24 @@ class Knowledge {
 
       const formattedPrompt = await chain.invoke(query);
 
-      const response = await this.engine.chat.completions.create({
-        messages: [{ role: "user", content: formattedPrompt.toString() }],
-        model: this.LLM_MODEL
-      });
+      let response;
+      if (this.backend === 'openai') {
+        response = await this.openaiBackend.chat([
+          { role: "user", content: formattedPrompt.toString() }
+        ]);
+      } else {
+        response = await this.engine.chat.completions.create({
+          messages: [{ role: "user", content: formattedPrompt.toString() }],
+          model: this.LLM_MODEL
+        });
+      }
 
       const relevantDocs = await this.vectorStore.similaritySearch(query, 3);
       
       return {
-        response: response.choices[0].message.content,
+        response: this.backend === 'openai' ? 
+          response.choices[0].message.content :
+          response.choices[0].message.content,
         sources: relevantDocs.map(doc => ({
           text: doc.pageContent,
           ...doc.metadata
@@ -187,6 +194,75 @@ class Knowledge {
       console.error('Error searching:', error);
       throw error;
     }
+  }
+
+  async storeText(text, url, title) {
+    if (!text || typeof text !== 'string') {
+      throw new Error('Invalid text input');
+    }
+    
+    await this._initializeIfNeeded();
+  
+    try {
+      const doc = {
+        pageContent: text,
+        metadata: {
+          url,
+          title,
+          timestamp: Date.now()
+        }
+      };
+  
+      // Add to vector store
+      if (!this.vectorStore) {
+        this.pendingDocuments.push(doc);
+      } else {
+        await this.vectorStore.addDocuments([doc]);
+      }
+  
+      // Save to chrome storage
+      const stored = await chrome.storage.local.get('vectors');
+      const vectors = stored.vectors || [];
+      vectors.push({
+        text,
+        url,
+        title,
+        timestamp: doc.metadata.timestamp
+      });
+      await chrome.storage.local.set({ vectors });
+  
+      return doc.metadata.timestamp;
+    } catch (error) {
+      console.error('Error storing text:', error);
+      throw new Error(`Failed to store text: ${error.message}`);
+    }
+  }
+
+  // Settings management
+  async updateSettings(settings) {
+    const { backend, apiKey } = settings;
+    
+    // Store settings
+    await chrome.storage.local.set({ backend, apiKey });
+    
+    // Reset initialization
+    this.isInitialized = false;
+    this.initPromise = null;
+    this.engine = null;
+    this.vectorStore = null;
+    this.embeddings = null;
+    this.openaiBackend = null;
+    
+    // Re-initialize with new settings
+    await this._initializeIfNeeded();
+  }
+
+  async getSettings() {
+    const settings = await chrome.storage.local.get(['backend', 'apiKey']);
+    return {
+      backend: settings.backend || 'local',
+      apiKey: settings.apiKey || ''
+    };
   }
 
   async getVectors() {
