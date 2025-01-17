@@ -24,18 +24,11 @@ export class PopupHandler {
     this.response = document.getElementById('response');
     this.knowledgeList = document.getElementById('knowledge-list');
     
-    // Knowledge base controls
-    this.searchInput = document.getElementById('searchKnowledge');
-    this.filterSelect = document.getElementById('filterType');
-    
-    // Settings elements
-    this.settingsButton = document.getElementById('settingsButton');
-    this.settingsModal = document.getElementById('settingsModal');
+    // Settings elements in knowledge tab
     this.backendSelect = document.getElementById('backendSelect');
     this.apiKeyInput = document.getElementById('apiKeyInput');
     this.openaiSettings = document.getElementById('openaiSettings');
     this.saveSettings = document.getElementById('saveSettings');
-    this.closeSettings = document.getElementById('closeSettings');
     
     this.tabButtons = document.querySelectorAll('.tab-button');
   }
@@ -50,20 +43,7 @@ export class PopupHandler {
       }
     });
 
-    // Knowledge base events
-    this.searchInput.addEventListener('input', () => this.filterKnowledgeList());
-    this.filterSelect.addEventListener('change', () => this.filterKnowledgeList());
-
-    // Tab events
-    this.tabButtons.forEach(button => {
-      button.addEventListener('click', () => this.switchTab(button.dataset.tab));
-    });
-
-    // Settings events with properly bound this context
-    this.settingsButton.addEventListener('click', () => {
-      this.toggleSettings(true);
-    });
-
+    // Settings events
     this.backendSelect.addEventListener('change', () => {
       this.toggleOpenAISettings();
     });
@@ -72,22 +52,9 @@ export class PopupHandler {
       await this.handleSaveSettings();
     });
 
-    this.closeSettings.addEventListener('click', () => {
-      this.toggleSettings(false);
-    });
-
-    // Close modal when clicking outside
-    this.settingsModal.addEventListener('click', (e) => {
-      if (e.target === this.settingsModal) {
-        this.toggleSettings(false);
-      }
-    });
-
-    // Global escape key event
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        this.toggleSettings(false);
-      }
+    // Tab events
+    this.tabButtons.forEach(button => {
+      button.addEventListener('click', () => this.switchTab(button.dataset.tab));
     });
   }
 
@@ -151,27 +118,7 @@ export class PopupHandler {
   // Knowledge base functionality
   async refreshKnowledgeList() {
     const vectors = await Knowledge.getVectors();
-    const filtered = this.filterVectors(vectors);
-    this.renderKnowledgeList(filtered);
-  }
-
-  filterVectors(vectors) {
-    const searchTerm = this.searchInput.value.toLowerCase();
-    const filterType = this.filterSelect.value;
-    
-    return vectors.filter(vector => {
-      const matchesSearch = vector.text.toLowerCase().includes(searchTerm) || 
-                          vector.insights?.some(i => i.content.toLowerCase().includes(searchTerm));
-      
-      switch (filterType) {
-        case 'insights':
-          return matchesSearch && vector.insights?.length > 0;
-        case 'original':
-          return matchesSearch && !vector.isInsight;
-        default:
-          return matchesSearch;
-      }
-    });
+    this.renderKnowledgeList(vectors);
   }
 
   renderKnowledgeList(vectors) {
@@ -179,64 +126,47 @@ export class PopupHandler {
       this.knowledgeList.innerHTML = this.renderEmptyState();
       return;
     }
-  
-    this.knowledgeList.innerHTML = vectors.map(vector => {
-      // Only display insights section
-      const insightsHtml = vector.insights?.length ? `
-        ${vector.insights.map(insight => `
-          <div class="knowledge-item insight">
-            <div class="knowledge-content">
-              <i class="fas fa-lightbulb"></i>
-              ${this.escapeHtml(insight.content)}
-            </div>
-            <div class="knowledge-meta">
-              <a href="${vector.url}" target="_blank" class="knowledge-source">
-                <i class="fas fa-link"></i>
-                ${this.escapeHtml(vector.title || 'Source')}
-              </a>
-              <span>
-                <i class="far fa-clock"></i>
-                ${new Date(insight.timestamp).toLocaleString()}
-              </span>
-            </div>
-            <button class="knowledge-delete" data-timestamp="${vector.timestamp}">
-              <i class="fas fa-trash"></i>
-            </button>
-          </div>
-        `).join('')}
-      ` : '';
-  
-      return `
-        <div class="knowledge-item original">
-          <div class="knowledge-content">
-            <div class="original-text">
-              <h4>Original Text</h4>
-              ${this.escapeHtml(vector.text)}
-            </div>
-            ${vector.insights?.length ? `
-              <div class="insights-section">
-                <h4>Generated Insights</h4>
-                ${insightsHtml}
-              </div>
-            ` : ''}
-          </div>
-          <div class="knowledge-meta">
-            <a href="${vector.url}" target="_blank" class="knowledge-source">
-              <i class="fas fa-link"></i>
-              ${this.escapeHtml(vector.title || 'Source')}
-            </a>
-            <span>
-              <i class="far fa-clock"></i>
-              ${new Date(vector.timestamp).toLocaleString()}
-            </span>
-          </div>
-          <button class="knowledge-delete" data-timestamp="${vector.timestamp}">
-            <i class="fas fa-trash"></i>
-          </button>
+
+    // Flatten and transform vectors to show only insights
+    const flattenedInsights = vectors.reduce((acc, vector) => {
+      if (vector.insights) {
+        const insights = vector.insights.map(insight => ({
+          content: insight.content,
+          url: vector.url,
+          title: vector.title,
+          timestamp: insight.timestamp || vector.timestamp,
+          vectorTimestamp: vector.timestamp // Keep original vector timestamp for deletion
+        }));
+        return [...acc, ...insights];
+      }
+      return acc;
+    }, []);
+
+    // Sort by timestamp, newest first
+    const sortedInsights = flattenedInsights.sort((a, b) => b.timestamp - a.timestamp);
+
+    this.knowledgeList.innerHTML = sortedInsights.map(insight => `
+      <div class="knowledge-item insight">
+        <div class="knowledge-content">
+          <i class="fas fa-lightbulb"></i>
+          ${this.escapeHtml(insight.content)}
         </div>
-      `;
-    }).join('');
-  
+        <div class="knowledge-meta">
+          <a href="${insight.url}" target="_blank" class="knowledge-source">
+            <i class="fas fa-link"></i>
+            ${this.escapeHtml(insight.title || 'Source')}
+          </a>
+          <span>
+            <i class="far fa-clock"></i>
+            ${new Date(insight.timestamp).toLocaleString()}
+          </span>
+        </div>
+        <button class="knowledge-delete" data-timestamp="${insight.vectorTimestamp}">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    `).join('');
+
     this.bindDeleteButtons();
   }
 
@@ -282,9 +212,11 @@ export class PopupHandler {
 
       await Knowledge.updateSettings(newSettings);
       
-      // Hide loading and modal after successful save
+      // Hide loading after successful save
       this.hideLoading();
-      this.toggleSettings(false);
+      
+      // Show success message
+      this.showSuccessMessage('Settings saved successfully');
       
       // Refresh the knowledge list
       await this.refreshKnowledgeList();
@@ -294,12 +226,21 @@ export class PopupHandler {
     }
   }
 
-  toggleSettings(show = true) {
-    if (show) {
-      this.settingsModal.classList.remove('hidden');
-    } else {
-      this.settingsModal.classList.add('hidden');
-    }
+  showSuccessMessage(message) {
+    const successEl = document.createElement('div');
+    successEl.className = 'success-message';
+    successEl.innerHTML = `
+      <i class="fas fa-check-circle"></i>
+      ${message}
+    `;
+    
+    // Insert after save button
+    this.saveSettings.parentNode.insertBefore(successEl, this.saveSettings.nextSibling);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      successEl.remove();
+    }, 3000);
   }
 
   toggleOpenAISettings() {
@@ -425,10 +366,6 @@ export class PopupHandler {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
-  }
-
-  filterKnowledgeList() {
-    this.refreshKnowledgeList();
   }
 }
 
