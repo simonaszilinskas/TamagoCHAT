@@ -1,3 +1,4 @@
+<!-- src/popup/popup.html -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -10,7 +11,6 @@
   <div class="app">
     <div id="loading">Initializing model...</div>
     <div id="main" style="display:none">
-      <!-- Header with tabs and settings -->
       <div class="header">
         <div class="tabs">
           <button class="tab-button active" data-tab="chat">
@@ -25,41 +25,7 @@
         </button>
       </div>
 
-      <!-- Settings Modal -->
-      <div id="settingsModal" class="settings-modal hidden">
-        <div class="settings-content">
-          <h3><i class="fas fa-cog"></i> Settings</h3>
-          <div class="setting-item">
-            <label>Backend:</label>
-            <select id="backendSelect">
-              <option value="local">
-                <i class="fas fa-laptop"></i> Local (WebLLM)
-              </option>
-              <option value="openai">
-                <i class="fas fa-cloud"></i> OpenAI
-              </option>
-            </select>
-          </div>
-          <div id="openaiSettings" class="setting-item hidden">
-            <label>OpenAI API Key:</label>
-            <input type="password" id="apiKeyInput" placeholder="sk-...">
-            <p class="hint">
-              <i class="fas fa-info-circle"></i>
-              Your API key will be stored locally
-            </p>
-          </div>
-          <div class="setting-actions">
-            <button id="saveSettings" class="primary">
-              <i class="fas fa-save"></i> Save
-            </button>
-            <button id="closeSettings">
-              <i class="fas fa-times"></i> Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Content Areas -->
+      <!-- Chat Interface -->
       <div id="chat" class="tab-content active">
         <div class="input-container">
           <textarea id="input" placeholder="Ask a question..."></textarea>
@@ -70,8 +36,40 @@
         <div id="response" class="response-container"></div>
       </div>
 
+      <!-- Knowledge Base Interface -->
       <div id="knowledge" class="tab-content">
+        <div class="knowledge-header">
+          <input type="text" id="searchKnowledge" placeholder="Search knowledge base..." class="search-input">
+          <select id="filterType" class="filter-select">
+            <option value="all">All Content</option>
+            <option value="insights">Insights Only</option>
+            <option value="original">Original Text Only</option>
+          </select>
+        </div>
         <div id="knowledge-list"></div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settingsModal" class="modal hidden">
+        <div class="modal-content">
+          <h3><i class="fas fa-cog"></i> Settings</h3>
+          <div class="setting-item">
+            <label>Backend:</label>
+            <select id="backendSelect">
+              <option value="local">Local (WebLLM)</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+          <div id="openaiSettings" class="setting-item hidden">
+            <label>OpenAI API Key:</label>
+            <input type="password" id="apiKeyInput" placeholder="sk-...">
+            <p class="hint">Your API key will be stored locally</p>
+          </div>
+          <div class="setting-actions">
+            <button id="saveSettings" class="primary">Save</button>
+            <button id="closeSettings">Cancel</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

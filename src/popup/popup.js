@@ -1,5 +1,6 @@
+// src/popup/popup.js
 import { PopupHandler } from './popup-handler.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-  new PopupHandler();
+  window.popupHandler = new PopupHandler();
 });
