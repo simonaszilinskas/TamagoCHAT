@@ -59,13 +59,31 @@ export class PopupHandler {
       button.addEventListener('click', () => this.switchTab(button.dataset.tab));
     });
 
-    // Settings events
-    this.settingsButton.addEventListener('click', () => this.toggleSettings());
-    this.backendSelect.addEventListener('change', () => this.toggleOpenAISettings());
-    this.saveSettings.addEventListener('click', () => this.saveSettings());
-    this.closeSettings.addEventListener('click', () => this.toggleSettings());
+    // Settings events with properly bound this context
+    this.settingsButton.addEventListener('click', () => {
+      this.toggleSettings(true);
+    });
 
-    // Global events
+    this.backendSelect.addEventListener('change', () => {
+      this.toggleOpenAISettings();
+    });
+
+    this.saveSettings.addEventListener('click', async () => {
+      await this.handleSaveSettings();
+    });
+
+    this.closeSettings.addEventListener('click', () => {
+      this.toggleSettings(false);
+    });
+
+    // Close modal when clicking outside
+    this.settingsModal.addEventListener('click', (e) => {
+      if (e.target === this.settingsModal) {
+        this.toggleSettings(false);
+      }
+    });
+
+    // Global escape key event
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         this.toggleSettings(false);
@@ -84,7 +102,7 @@ export class PopupHandler {
       
       await this.loadSettings();
       this.hideLoading();
-      this.refreshKnowledgeList();
+      await this.refreshKnowledgeList();
     } catch (error) {
       this.handleError('Initialization error', error);
     }
@@ -166,7 +184,7 @@ export class PopupHandler {
       // Only display insights section
       const insightsHtml = vector.insights?.length ? `
         ${vector.insights.map(insight => `
-          <div class="knowledge-item">
+          <div class="knowledge-item insight">
             <div class="knowledge-content">
               <i class="fas fa-lightbulb"></i>
               ${this.escapeHtml(insight.content)}
@@ -188,7 +206,35 @@ export class PopupHandler {
         `).join('')}
       ` : '';
   
-      return insightsHtml;
+      return `
+        <div class="knowledge-item original">
+          <div class="knowledge-content">
+            <div class="original-text">
+              <h4>Original Text</h4>
+              ${this.escapeHtml(vector.text)}
+            </div>
+            ${vector.insights?.length ? `
+              <div class="insights-section">
+                <h4>Generated Insights</h4>
+                ${insightsHtml}
+              </div>
+            ` : ''}
+          </div>
+          <div class="knowledge-meta">
+            <a href="${vector.url}" target="_blank" class="knowledge-source">
+              <i class="fas fa-link"></i>
+              ${this.escapeHtml(vector.title || 'Source')}
+            </a>
+            <span>
+              <i class="far fa-clock"></i>
+              ${new Date(vector.timestamp).toLocaleString()}
+            </span>
+          </div>
+          <button class="knowledge-delete" data-timestamp="${vector.timestamp}">
+            <i class="fas fa-trash"></i>
+          </button>
+        </div>
+      `;
     }).join('');
   
     this.bindDeleteButtons();
@@ -197,8 +243,10 @@ export class PopupHandler {
   renderEmptyState() {
     return `
       <div class="knowledge-item empty-state">
-        <i class="fas fa-lightbulb"></i>
-        <p>No knowledge stored yet. Highlight text on any webpage and use the right-click menu to add it.</p>
+        <div class="knowledge-content">
+          <i class="fas fa-lightbulb"></i>
+          <p>No knowledge stored yet. Highlight text on any webpage and use the right-click menu to add it.</p>
+        </div>
       </div>
     `;
   }
@@ -223,30 +271,47 @@ export class PopupHandler {
     this.toggleOpenAISettings();
   }
 
-  async saveSettings() {
+  async handleSaveSettings() {
     try {
       this.showLoading('Updating settings...');
-      await Knowledge.updateSettings({
+      
+      const newSettings = {
         backend: this.backendSelect.value,
         apiKey: this.backendSelect.value === 'openai' ? this.apiKeyInput.value.trim() : ''
-      });
-      this.toggleSettings(false);
+      };
+
+      await Knowledge.updateSettings(newSettings);
+      
+      // Hide loading and modal after successful save
       this.hideLoading();
+      this.toggleSettings(false);
+      
+      // Refresh the knowledge list
+      await this.refreshKnowledgeList();
     } catch (error) {
+      this.hideLoading();
       this.handleError('Settings update error', error);
     }
   }
 
-  // UI state management
   toggleSettings(show = true) {
-    this.settingsModal.classList.toggle('hidden', !show);
+    if (show) {
+      this.settingsModal.classList.remove('hidden');
+    } else {
+      this.settingsModal.classList.add('hidden');
+    }
   }
 
   toggleOpenAISettings() {
     const isOpenAI = this.backendSelect.value === 'openai';
-    this.openaiSettings.classList.toggle('hidden', !isOpenAI);
+    if (isOpenAI) {
+      this.openaiSettings.classList.remove('hidden');
+    } else {
+      this.openaiSettings.classList.add('hidden');
+    }
   }
 
+  // UI state management
   switchTab(tabId) {
     this.tabButtons.forEach(button => {
       const isActive = button.dataset.tab === tabId;
@@ -332,6 +397,29 @@ export class PopupHandler {
     `;
   }
 
+  handleError(context, error) {
+    console.error(`${context}:`, error);
+    // Display error message in the UI
+    const errorMessage = `Error: ${error.message}`;
+    if (this.response) {
+      this.response.innerHTML = `
+        <div class="error">
+          <i class="fas fa-exclamation-circle"></i>
+          ${errorMessage}
+        </div>
+      `;
+    } else {
+      // If response element isn't available, show in loading div
+      this.loading.innerHTML = `
+        <div class="error">
+          <i class="fas fa-exclamation-triangle"></i>
+          ${errorMessage}
+          <button onclick="location.reload()">Retry</button>
+        </div>
+      `;
+    }
+  }
+
   escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -339,13 +427,8 @@ export class PopupHandler {
     return div.innerHTML;
   }
 
-  handleError(context, error) {
-    console.error(`${context}:`, error);
-    this.loading.innerHTML = `
-      <i class="fas fa-exclamation-triangle"></i>
-      Error: ${error.message}
-      <button onclick="location.reload()">Retry</button>
-    `;
+  filterKnowledgeList() {
+    this.refreshKnowledgeList();
   }
 }
 

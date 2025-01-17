@@ -3,7 +3,6 @@ import * as webllm from "@mlc-ai/web-llm";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { RunnableSequence, RunnablePassthrough } from "@langchain/core/runnables";
-import { formatDocumentsAsString } from "langchain/util/document";
 import OpenAIBackend from './backends/openai';
 import TextProcessor from './text-processor';
 import { WebLLMEmbeddings } from './embeddings';
@@ -23,7 +22,6 @@ class Knowledge {
     this.textProcessor = null;
   }
 
-  // Add this method right after constructor
   async _initializeIfNeeded(callback) {
     if (this.isInitialized) return;
     
@@ -39,7 +37,45 @@ class Knowledge {
     }
   }
 
-// Update storeText method for sequential timestamps
+  async _initialize(callback) {
+    try {
+      const settings = await chrome.storage.local.get(['backend', 'apiKey']);
+      this.backend = settings.backend || 'local';
+
+      if (this.backend === 'openai') {
+        if (!settings.apiKey) throw new Error('OpenAI API key not found');
+        this.openaiBackend = new OpenAIBackend(settings.apiKey);
+        if (!await this.openaiBackend.verifyApiKey()) {
+          throw new Error('Invalid OpenAI API key');
+        }
+        this.embeddings = this.openaiBackend;
+        this.textProcessor = new TextProcessor(this.openaiBackend, "gpt-3.5-turbo");
+      } else {
+        this.engine = await webllm.CreateMLCEngine(
+          [this.EMBEDDING_MODEL, this.LLM_MODEL],
+          { initProgressCallback: callback, logLevel: "INFO" }
+        );
+        
+        this.embeddings = new WebLLMEmbeddings(this.engine, this.EMBEDDING_MODEL);
+        this.textProcessor = new TextProcessor(
+          this.engine, 
+          this.LLM_MODEL
+        );
+      }
+
+      this.vectorStore = await MemoryVectorStore.fromExistingIndex(this.embeddings);
+      await this.loadStoredVectors();
+      await this.processPendingDocuments();
+      
+      this.isInitialized = true;
+    } catch (error) {
+      console.error('Initialization error:', error);
+      this.isInitialized = false;
+      this.initPromise = null;
+      throw error;
+    }
+  }
+
   async storeText(text, url, title) {
     if (!text || typeof text !== 'string') {
       throw new Error('Invalid text input');
@@ -53,26 +89,17 @@ class Knowledge {
       // Process text to extract insights
       const processedContent = await this.textProcessor.processText(text, url, title);
       
-      // Store both original text and insights with sequential timestamps
-      const documents = [{
-        pageContent: text,
-        metadata: {
-          url,
-          title,
-          timestamp: baseTimestamp,
-          isOriginal: true
-        }
-      },
-      ...processedContent.insights.map((insight, index) => ({
+      // Only store insights in the vector store
+      const documents = processedContent.insights.map((insight, index) => ({
         pageContent: insight.content,
         metadata: {
           url,
           title,
-          timestamp: baseTimestamp + index + 1, // Sequential timestamps
+          timestamp: baseTimestamp + index + 1,
           isInsight: true,
           originalText: text
         }
-      }))];
+      }));
 
       if (!this.vectorStore) {
         this.pendingDocuments.push(...documents);
@@ -80,7 +107,7 @@ class Knowledge {
         await this.vectorStore.addDocuments(documents);
       }
 
-      // Save to chrome storage with insights
+      // Save complete information to chrome storage
       const stored = await chrome.storage.local.get('vectors');
       const vectors = stored.vectors || [];
       vectors.push({
@@ -102,12 +129,6 @@ class Knowledge {
     }
   }
 
-// Simplify extractResponseContent
-  extractResponseContent(response) {
-    return response.choices[0].message.content;
-  }
-
-// Update search method template
   async search(query, context = "") {
     await this._initializeIfNeeded();
     if (!this.vectorStore) throw new Error("Vector store not initialized");
@@ -154,187 +175,44 @@ class Knowledge {
     }
   }
 
-  async _initialize(callback) {
-    try {
-      const settings = await chrome.storage.local.get(['backend', 'apiKey']);
-      this.backend = settings.backend || 'local';
-
-      if (this.backend === 'openai') {
-        if (!settings.apiKey) throw new Error('OpenAI API key not found');
-        this.openaiBackend = new OpenAIBackend(settings.apiKey);
-        if (!await this.openaiBackend.verifyApiKey()) {
-          throw new Error('Invalid OpenAI API key');
-        }
-        this.embeddings = this.openaiBackend;
-        this.textProcessor = new TextProcessor(this.openaiBackend, "gpt-3.5-turbo");
-      } else {
-        // Initialize both models
-        this.engine = await webllm.CreateMLCEngine(
-          [this.EMBEDDING_MODEL, this.LLM_MODEL],
-          { initProgressCallback: callback, logLevel: "INFO" }
-        );
-        
-        // Create separate engine instances for embeddings and chat
-        this.embeddings = new WebLLMEmbeddings(this.engine, this.EMBEDDING_MODEL);
-        this.textProcessor = new TextProcessor(
-          this.engine, 
-          this.LLM_MODEL,
-          this.EMBEDDING_MODEL // Pass embedding model ID
-        );
-      }
-
-      this.vectorStore = await MemoryVectorStore.fromExistingIndex(this.embeddings);
-      await this.loadStoredVectors();
-      await this.processPendingDocuments();
+  async loadStoredVectors() {
+    const stored = await chrome.storage.local.get('vectors');
+    if (stored.vectors?.length > 0) {
+      const documents = [];
       
-      this.isInitialized = true;
-    } catch (error) {
-      console.error('Initialization error:', error);
-      this.isInitialized = false;
-      this.initPromise = null;
-      throw error;
+      // Only load insights into vector store
+      for (const vector of stored.vectors) {
+        if (vector.insights) {
+          documents.push(...vector.insights.map(insight => ({
+            pageContent: insight.content,
+            metadata: {
+              url: vector.url,
+              title: vector.title,
+              timestamp: vector.timestamp,
+              isInsight: true,
+              originalText: vector.text
+            }
+          })));
+        }
+      }
+      
+      if (documents.length > 0) {
+        await this.vectorStore.addDocuments(documents);
+      }
     }
   }
 
   async processPendingDocuments() {
     if (this.pendingDocuments.length > 0) {
-      await Promise.all(this.pendingDocuments.map(doc => 
-        this.vectorStore.addDocuments([doc])
-      ));
+      await this.vectorStore.addDocuments(this.pendingDocuments);
       this.pendingDocuments = [];
     }
   }
 
-  async loadStoredVectors() {
-    const stored = await chrome.storage.local.get('vectors');
-    if (stored.vectors?.length > 0) {
-      const documents = stored.vectors.map(v => ({
-        pageContent: v.text,
-        metadata: {
-          url: v.url,
-          title: v.title,
-          timestamp: v.timestamp,
-          isInsight: v.isInsight,
-          originalText: v.originalText
-        }
-      }));
-      await this.vectorStore.addDocuments(documents);
-    }
-  }
-
-  async storeText(text, url, title) {
-    if (!text || typeof text !== 'string') {
-      throw new Error('Invalid text input');
-    }
-    
-    await this._initializeIfNeeded();
-    
-    try {
-      // Process text to extract insights
-      const processedContent = await this.textProcessor.processText(text, url, title);
-      
-      // Store both original text and insights
-      const documents = [{
-        pageContent: text,
-        metadata: {
-          url,
-          title,
-          timestamp: Date.now(),
-          isOriginal: true
-        }
-      },
-      ...processedContent.insights.map(insight => ({
-        pageContent: insight.content,
-        metadata: {
-          url,
-          title,
-          timestamp: Date.now(),
-          isInsight: true,
-          originalText: text
-        }
-      }))];
-
-      if (!this.vectorStore) {
-        this.pendingDocuments.push(...documents);
-      } else {
-        await this.vectorStore.addDocuments(documents);
-      }
-
-      // Save to chrome storage with insights
-      const stored = await chrome.storage.local.get('vectors');
-      const vectors = stored.vectors || [];
-      vectors.push({
-        text,
-        url,
-        title,
-        timestamp: documents[0].metadata.timestamp,
-        insights: processedContent.insights
-      });
-      await chrome.storage.local.set({ vectors });
-
-      return {
-        timestamp: documents[0].metadata.timestamp,
-        insights: processedContent.insights
-      };
-    } catch (error) {
-      console.error('Error storing text:', error);
-      throw new Error(`Failed to store text: ${error.message}`);
-    }
-  }
-
-  async search(query, context = "") {
-    await this._initializeIfNeeded();
-    if (!this.vectorStore) throw new Error("Vector store not initialized");
-
-    try {
-      // First search for relevant insights
-      const relevantDocs = await this.vectorStore.similaritySearch(query, 5);
-      
-      // Prioritize insights but include original content for context
-      const organizedDocs = this.organizeSearchResults(relevantDocs);
-
-      const promptTemplate = PromptTemplate.fromTemplate(`
-        Answer the question based on the following insights and context.
-        Prioritize information from the insights but use the full context for additional details if needed.
-        If the context doesn't contain relevant information, say so.
-
-        Key Insights:
-        {insights}
-
-        Full Context:
-        {context}
-
-        Additional Context: ${context}
-
-        Question: {question}
-
-        Answer:`);
-
-      const chain = RunnableSequence.from([
-        {
-          insights: () => organizedDocs.insights.map(d => d.pageContent).join('\n'),
-          context: () => organizedDocs.fullContext.map(d => d.pageContent).join('\n'),
-          question: new RunnablePassthrough()
-        },
-        promptTemplate
-      ]);
-
-      const formattedPrompt = await chain.invoke(query);
-      const response = await this.getResponse(formattedPrompt);
-
-      return {
-        response: this.extractResponseContent(response),
-        sources: this.formatSources(organizedDocs)
-      };
-    } catch (error) {
-      console.error('Error searching:', error);
-      throw error;
-    }
-  }
-
   organizeSearchResults(docs) {
-    const insights = docs.filter(doc => doc.metadata.isInsight);
-    const fullContext = docs.filter(doc => !doc.metadata.isInsight);
+    // All docs should be insights since we only store insights
+    const insights = docs;
+    const fullContext = []; // Empty since we don't store original texts in vector store
     return { insights, fullContext };
   }
 
@@ -351,9 +229,7 @@ class Knowledge {
   }
 
   extractResponseContent(response) {
-    return this.backend === 'openai' 
-      ? response.choices[0].message.content 
-      : response.choices[0].message.content;
+    return response.choices[0].message.content;
   }
 
   formatSources(organizedDocs) {
@@ -363,23 +239,18 @@ class Knowledge {
         url: doc.metadata.url,
         title: doc.metadata.title,
         timestamp: doc.metadata.timestamp,
-        isInsight: doc.metadata.isInsight
+        isInsight: true,
+        originalText: doc.metadata.originalText
       })),
-      context: organizedDocs.fullContext.map(doc => ({
-        text: doc.pageContent,
-        url: doc.metadata.url,
-        title: doc.metadata.title,
-        timestamp: doc.metadata.timestamp,
-        isInsight: doc.metadata.isInsight
-      }))
+      context: [] // Empty since we don't store original texts in vector store
     };
   }
 
-  // Settings management
   async updateSettings(settings) {
     const { backend, apiKey } = settings;
     await chrome.storage.local.set({ backend, apiKey });
     
+    // Reset all state
     this.isInitialized = false;
     this.initPromise = null;
     this.engine = null;
@@ -413,19 +284,26 @@ class Knowledge {
     // Reinitialize vector store with updated vectors
     if (this.vectorStore) {
       this.vectorStore = await MemoryVectorStore.fromExistingIndex(this.embeddings);
-      if (updatedVectors.length > 0) {
-        await this.vectorStore.addDocuments(
-          updatedVectors.map(v => ({
-            pageContent: v.text,
+      
+      // Only reload insights into vector store
+      const documents = [];
+      for (const vector of updatedVectors) {
+        if (vector.insights) {
+          documents.push(...vector.insights.map(insight => ({
+            pageContent: insight.content,
             metadata: {
-              url: v.url,
-              title: v.title,
-              timestamp: v.timestamp,
-              isInsight: v.isInsight,
-              originalText: v.originalText
+              url: vector.url,
+              title: vector.title,
+              timestamp: vector.timestamp,
+              isInsight: true,
+              originalText: vector.text
             }
-          }))
-        );
+          })));
+        }
+      }
+      
+      if (documents.length > 0) {
+        await this.vectorStore.addDocuments(documents);
       }
     }
   }
